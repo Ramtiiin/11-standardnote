@@ -1,0 +1,152 @@
+#version: '3.8'
+services:
+    mysql:
+        #build:
+        image: mysql:latest
+        volumes:
+            - /root/docker/11-sn/mysql:/var/lib/mysql
+        ports:
+            - 3306:3306
+        environment:
+            - MYSQL_ROOT_PASSWORD=admin
+    phpmyadmin:
+        image: phpmyadmin
+        ports:
+            - 8008:80
+        environment:
+            - PMA_PORT=3306
+            - PMA_HOST=172.28.28.28
+
+    syncing-server-js:
+        image: standardnotes/syncing-server-js:1.52.0
+        container_name: syncing-server-js-standalone
+        depends_on:
+            - db
+            - cache
+        entrypoint: [
+            "./wait-for.sh", "db", "3306",
+            "./wait-for.sh", "cache", "6379",
+            "./docker/entrypoint.sh", "start-web"
+        ]
+        env_file: .env
+        environment:
+            PORT: 8008
+        restart: unless-stopped
+        networks:
+            - standardnotes_standalone
+
+    syncing-server-js-worker:
+        image: standardnotes/syncing-server-js:1.52.0
+        container_name: syncing-server-js-worker-standalone
+        depends_on:
+            - db
+            - cache
+            - syncing-server-js
+        entrypoint: [
+            "./wait-for.sh", "db", "3306",
+            "./wait-for.sh", "cache", "6379",
+            "./wait-for.sh", "syncing-server-js", "8008",
+            "./docker/entrypoint.sh", "start-worker"
+        ]
+        env_file: .env
+        environment:
+            PORT: 8008
+        restart: unless-stopped
+        networks:
+            - standardnotes_standalone
+
+    api-gateway:
+        image: standardnotes/api-gateway:1.37.0
+        container_name: api-gateway-standalone
+        depends_on:
+            - auth
+            - syncing-server-js
+        env_file: docker/api-gateway.env
+        ports:
+            - ${EXPOSED_PORT}:8008
+        environment:
+            PORT: 8008
+            AUTH_JWT_SECRET: '${AUTH_JWT_SECRET}'
+            REDIS_URL: '${REDIS_URL}'
+        entrypoint: [
+            "./wait-for.sh", "auth", "8008",
+            "./wait-for.sh", "syncing-server-js", "8008",
+            "./docker/entrypoint.sh", "start-web"
+        ]
+        restart: unless-stopped
+        networks:
+            - standardnotes_standalone
+
+    auth:
+        image: standardnotes/auth:1.43.0
+        container_name: auth-standalone
+        depends_on:
+            - db
+            - cache
+            - syncing-server-js
+        entrypoint: [
+            "./wait-for.sh", "db", "3306",
+            "./wait-for.sh", "cache", "6379",
+            "./wait-for.sh", "syncing-server-js", "8008",
+            "./docker/entrypoint.sh", "start-web"
+        ]
+        env_file: docker/auth.env
+        environment:
+            PORT: 3000
+            DB_HOST: '${DB_HOST}'
+            DB_REPLICA_HOST: '${DB_REPLICA_HOST}'
+            DB_PORT: '${DB_PORT}'
+            DB_DATABASE: '${DB_DATABASE}'
+            DB_USERNAME: '${DB_USERNAME}'
+            DB_PASSWORD: '${DB_PASSWORD}'
+            DB_DEBUG_LEVEL: '${DB_DEBUG_LEVEL}'
+            DB_MIGRATIONS_PATH: '${DB_MIGRATIONS_PATH}'
+            REDIS_URL: '${REDIS_URL}'
+            AUTH_JWT_SECRET: '${AUTH_JWT_SECRET}'
+        restart: unless-stopped
+        networks:
+            - standardnotes_standalone
+
+    auth-worker:
+        image: standardnotes/auth:1.43.0
+        container_name: auth-worker-standalone
+        depends_on:
+            - db
+            - cache
+            - auth
+        entrypoint: [
+            "./wait-for.sh", "db", "3306",
+            "./wait-for.sh", "cache", "6379",
+            "./wait-for.sh", "auth", "8008",
+            "./docker/entrypoint.sh", "start-worker"
+        ]
+        env_file: docker/auth.env
+        environment:
+            PORT: 3000
+            DB_HOST: '${DB_HOST}'
+            DB_REPLICA_HOST: '${DB_REPLICA_HOST}'
+            DB_PORT: '${DB_PORT}'
+            DB_DATABASE: '${DB_DATABASE}'
+            DB_USERNAME: '${DB_USERNAME}'
+            DB_PASSWORD: '${DB_PASSWORD}'
+            DB_DEBUG_LEVEL: '${DB_DEBUG_LEVEL}'
+            DB_MIGRATIONS_PATH: '${DB_MIGRATIONS_PATH}'
+            REDIS_URL: '${REDIS_URL}'
+            AUTH_JWT_SECRET: '${AUTH_JWT_SECRET}'
+        restart: unless-stopped
+        networks:
+            - standardnotes_standalone
+
+    cache:
+        image: redis:6.0-alpine
+        container_name: cache-standalone
+        volumes:
+            - ./data/redis/:/data
+        expose:
+            - 6379
+        restart: unless-stopped
+        networks:
+            - standardnotes_standalone
+networks:
+    standardnotes_standalone:
+        name: standardnotes_standalone
